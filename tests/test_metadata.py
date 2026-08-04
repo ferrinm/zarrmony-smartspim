@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import write_synthetic_smartspim
 from zarrmony_smartspim._metadata import (
     SmartSpimMetadataError,
     find_metadata_file,
@@ -102,3 +103,37 @@ def test_find_metadata_multiple_raises(tmp_path: Path) -> None:
     (d / "metadata_b.json").write_text("{}")
     with pytest.raises(SmartSpimMetadataError, match="multiple"):
         find_metadata_file(d)
+
+
+def test_wavelength_config_parsed_when_present(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"dye": "GFP", "emission_low_nm": 500, "emission_high_nm": 550},
+            "561": {"dye": "mCherry", "emission_nm": 610},
+        },
+    )
+    meta = parse_metadata_file(fixture.metadata_path)
+    # Keys are cast to int so callers can look up by the excitation they
+    # parsed out of the directory name.
+    assert set(meta.wavelength_config) == {488, 561}
+    assert meta.wavelength_config[488]["dye"] == "GFP"
+
+    # A single ``emission_nm`` scalar becomes low==high per zarrmony#61's
+    # uniform-band convention.
+    identity = meta.channel_identity_for(561)
+    assert identity.dye == "mCherry"
+    assert identity.emission_low_nm == 610.0
+    assert identity.emission_high_nm == 610.0
+
+
+def test_wavelength_config_absent_yields_empty_map(synthetic_smartspim) -> None:
+    meta = parse_metadata_file(synthetic_smartspim.metadata_path)
+    assert meta.wavelength_config == {}
+    identity = meta.channel_identity_for(488)
+    # Only excitation is populated; other fields fall to None.
+    assert identity.excitation_nm == 488
+    assert identity.dye is None
+    assert identity.fluor is None
+    assert identity.emission_low_nm is None

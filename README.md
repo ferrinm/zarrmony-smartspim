@@ -19,16 +19,42 @@ pip install git+https://github.com/ferrinm/zarrmony-smartspim
 
 This pulls `zarrmony` from PyPI as a transitive dependency.
 
-## Scope of v0.1 (tracer bullet)
+## Scope
 
-The v0.1 plugin ships the smallest end-to-end slice:
-
-- Single-scene per SmartSPIM export (one Z-stack, from the first
-  `Ex_<λ>_Ch<N>_stitched/` channel dir it finds).
+- Single-scene per SmartSPIM export (one Z-stack).
+- All `Ex_<λ>_Ch<N>_stitched/` directories under the export root are stacked
+  along `C` in directory-name order.
 - Physical pixel sizes populated from the sidecar metadata JSON
   (`session_config.µm/pix` for X/Y, `session_config.z_step_um` for Z).
-- Channel identity, OME-XML synthesis, and the ADR-0008 instrument audit
-  block land in follow-up slices.
+- Per-channel identity — name, dye, fluorophore, excitation and emission
+  wavelengths — synthesised into a native `ome_types.OME` object exposed as
+  `reader.ome_metadata`. Excitation is always known (from the directory
+  name); the remaining fields come from an optional `wavelength_config`
+  block in the sidecar (see below).
+- The ADR-0008 instrument audit block (microscope, serial, acquisition
+  date) lands in a follow-up slice.
+
+### Optional `wavelength_config` block
+
+Keyed by excitation-wavelength string. Any subset of these keys is honored;
+the whole block is optional and readers fall back to `Ex<λ>` labels when it
+is absent:
+
+```json
+"wavelength_config": {
+  "488": {
+    "name": "GFP",
+    "dye": "GFP",
+    "fluor": "GFP",
+    "emission_low_nm": 500,
+    "emission_high_nm": 550
+  },
+  "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610}
+}
+```
+
+A single `emission_nm` scalar is expanded to `emission_low_nm ==
+emission_high_nm` per the ADR-0008 / zarrmony#61 uniform-band convention.
 
 ## Metadata sidecar
 

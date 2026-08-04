@@ -12,7 +12,9 @@ from pathlib import Path
 
 import tifffile
 import zarr
+from ome_types import from_xml
 
+from tests.conftest import write_synthetic_smartspim
 from zarrmony_smartspim import plugin
 
 
@@ -85,3 +87,76 @@ def test_convert_preserves_source_tif_pixels_verbatim(synthetic_smartspim, tmp_p
         assert (arr[0, 0, z, :, :] == on_disk).all(), (
             f"z={z}: OME-Zarr voxel plane differs from source {tif_path.name}"
         )
+
+
+def test_convert_multichannel_writes_all_channels(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path / "in",
+        channel_specs=((488, 1), (561, 3), (639, 4)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_nm": 525},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+            "639": {"name": "Cy5", "fluor": "Cy5", "emission_nm": 670},
+        },
+    )
+    out_dir = tmp_path / "out"
+    _convert_with_plugin(fixture.export_dir, out_dir)
+
+    store = next(out_dir.glob("*.ome.zarr"))
+    arr = zarr.open_group(str(store), mode="r")["0"]
+    assert arr.shape == (
+        1,
+        3,
+        fixture.size_z,
+        fixture.size_y,
+        fixture.size_x,
+    )
+    # Verify each channel's pixel content survived stacking into C.
+    for channel_index in range(3):
+        for z in range(fixture.size_z):
+            expected = fixture.value_for(z, channel_index=channel_index)
+            assert (arr[0, channel_index, z, :, :] == expected).all(), f"C={channel_index} Z={z}"
+
+
+def test_omero_channel_labels_match_reader_channel_names(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path / "in",
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_nm": 525},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    out_dir = tmp_path / "out"
+    _convert_with_plugin(fixture.export_dir, out_dir)
+
+    store = next(out_dir.glob("*.ome.zarr"))
+    grp = zarr.open_group(str(store), mode="r")
+    ome_attrs = grp.attrs["ome"]
+    omero_labels = [c["label"] for c in ome_attrs["omero"]["channels"]]
+    assert omero_labels == ["GFP", "mCherry"]
+
+
+def test_ome_xml_written_and_round_trips_to_ome(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path / "in",
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_nm": 525},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    out_dir = tmp_path / "out"
+    _convert_with_plugin(fixture.export_dir, out_dir)
+
+    store = next(out_dir.glob("*.ome.zarr"))
+    xml_path = store / "OME" / "METADATA.ome.xml"
+    assert xml_path.is_file(), (
+        f"expected OME/METADATA.ome.xml under {store}, got contents: "
+        f"{sorted(p.name for p in store.iterdir())}"
+    )
+    ome = from_xml(xml_path.read_text())
+    assert len(ome.images) == 1
+    channels = ome.images[0].pixels.channels
+    assert [c.name for c in channels] == ["GFP", "mCherry"]
+    assert [c.fluor for c in channels] == ["GFP", "mCherry"]

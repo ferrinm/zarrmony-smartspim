@@ -7,15 +7,24 @@ sequence. ``json.loads(raw.decode("utf-8"))`` therefore raises
 ``UnicodeDecodeError`` on real files; we open with ``latin-1`` to round-trip
 the bytes verbatim.
 
-Only the two fields v0.1 needs (X/Y pixel size and Z step, both in microns)
-are surfaced on the dataclass. The verbatim raw dict is preserved on
-``raw`` for the ``metadata`` attribute and future audit-block use.
+Two blocks are surfaced today:
+
+* ``session_config.µm/pix`` and ``session_config.z_step_um`` — physical
+  pixel sizes, required (slice #1).
+* ``wavelength_config`` — an optional dict keyed by excitation-wavelength
+  string (e.g. ``"488"``) that carries per-channel identity fields
+  (``name`` / ``dye`` / ``fluor`` / ``emission_low_nm`` / ``emission_high_nm``
+  / ``emission_nm``). Any subset of those keys is accepted; the whole block
+  is optional (readers fall back to directory-name-derived names).
+
+The verbatim raw dict is preserved on ``raw`` for the ``metadata``
+attribute and future audit-block use.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +36,29 @@ class SmartSpimMetadataError(ValueError):
 _METADATA_GLOB = "metadata*.json"
 _XY_PIXEL_KEY = "µm/pix"  # literal 'µm/pix' — matches the vendor's latin-1 byte
 _Z_STEP_KEY = "z_step_um"
+_WAVELENGTH_CONFIG_KEY = "wavelength_config"
+
+
+@dataclass(frozen=True)
+class ChannelIdentity:
+    """Per-channel identity fields for one SmartSPIM channel.
+
+    Excitation is always known — it comes from the ``Ex_<λ>_Ch<N>_stitched``
+    directory name and the adapter passes it in verbatim. Every other field
+    is optional and only present when the sidecar provided it. This mirrors
+    the ADR-0008 audit shape: "reader didn't extract this field" (attribute
+    ``None``) must be distinguishable from "reader tried and got nothing"
+    so downstream ingest can tell the two apart. ``name`` is filled in by
+    the adapter (from the sidecar, or derived from the excitation) so it is
+    always present in practice.
+    """
+
+    excitation_nm: int
+    name: str | None = None
+    dye: str | None = None
+    fluor: str | None = None
+    emission_low_nm: float | None = None
+    emission_high_nm: float | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +69,29 @@ class SmartSpimMetadata:
     raw_text: str
     xy_pixel_size_um: float
     z_step_um: float
+    wavelength_config: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+    def channel_identity_for(self, excitation_nm: int) -> ChannelIdentity:
+        """Merge sidecar identity fields (if any) with the required excitation.
+
+        Missing sidecar → an identity carrying just the excitation. Missing
+        emission band with a single ``emission_nm`` scalar → ``low == high``
+        matching #61's uniform-band convention.
+        """
+        entry = self.wavelength_config.get(excitation_nm, {})
+        emission_low = entry.get("emission_low_nm")
+        emission_high = entry.get("emission_high_nm")
+        emission_scalar = entry.get("emission_nm")
+        if emission_scalar is not None and emission_low is None and emission_high is None:
+            emission_low = emission_high = float(emission_scalar)
+        return ChannelIdentity(
+            excitation_nm=excitation_nm,
+            name=entry.get("name"),
+            dye=entry.get("dye"),
+            fluor=entry.get("fluor"),
+            emission_low_nm=float(emission_low) if emission_low is not None else None,
+            emission_high_nm=float(emission_high) if emission_high is not None else None,
+        )
 
 
 def find_metadata_file(export_dir: Path) -> Path:
@@ -101,9 +156,35 @@ def parse_metadata_file(path: Path) -> SmartSpimMetadata:
             f"{session_config[_Z_STEP_KEY]!r}"
         ) from exc
 
+    wavelength_config = _parse_wavelength_config(raw.get(_WAVELENGTH_CONFIG_KEY))
+
     return SmartSpimMetadata(
         raw=raw,
         raw_text=raw_text,
         xy_pixel_size_um=xy_pixel_size_um,
         z_step_um=z_step_um,
+        wavelength_config=wavelength_config,
     )
+
+
+def _parse_wavelength_config(block: Any) -> dict[int, dict[str, Any]]:
+    """Normalize the optional ``wavelength_config`` block to int-keyed dicts.
+
+    Real SmartSPIM sidecars key this block by excitation-wavelength STRING;
+    we cast to ``int`` so callers can look up by the same integer they parsed
+    out of the directory name. Non-dict block, non-integer keys, or non-dict
+    entries are silently dropped — the whole block is optional and
+    fail-closed is the right stance for identity metadata.
+    """
+    if not isinstance(block, dict):
+        return {}
+    normalized: dict[int, dict[str, Any]] = {}
+    for key, entry in block.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            wavelength = int(key)
+        except (TypeError, ValueError):
+            continue
+        normalized[wavelength] = entry
+    return normalized

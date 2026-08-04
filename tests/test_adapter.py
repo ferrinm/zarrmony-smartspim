@@ -43,7 +43,7 @@ def test_set_scene_out_of_range_raises(synthetic_smartspim) -> None:
         reader.set_scene(1)
 
 
-def test_xarray_dims_and_shape(synthetic_smartspim) -> None:
+def test_xarray_dims_and_shape_single_channel(synthetic_smartspim) -> None:
     reader = SmartSpimReader(synthetic_smartspim.export_dir)
     xr_da = reader.xarray_dask_data
     assert xr_da.dims == ("T", "C", "Z", "Y", "X")
@@ -88,19 +88,159 @@ def test_dtype_reflects_slice_dtype(synthetic_smartspim) -> None:
     assert reader.dtype == np.uint16
 
 
-def test_selects_first_channel_dir_alphabetically(tmp_path: Path) -> None:
-    # A three-channel fixture exposes exactly the tracer-bullet scope:
-    # one scene per export, sourced from the alphabetically-first stitched
-    # channel dir. Multi-channel semantics arrive in slice #2.
+def test_stacks_all_channels_along_c_in_directory_order(tmp_path: Path) -> None:
     fixture = write_synthetic_smartspim(
         tmp_path,
         channel_specs=((488, 1), (561, 3), (639, 4)),
     )
     reader = SmartSpimReader(fixture.export_dir)
-    # Content of Ch1 (first alphabetically) — value_for(z, channel_index=0).
-    computed = reader.xarray_dask_data.data.compute()
-    for z in range(fixture.size_z):
-        assert (computed[0, 0, z] == fixture.value_for(z, channel_index=0)).all()
+    xr_da = reader.xarray_dask_data
+    assert xr_da.shape == (
+        1,
+        3,
+        fixture.size_z,
+        fixture.size_y,
+        fixture.size_x,
+    )
+    computed = xr_da.data.compute()
+    for channel_index in range(3):
+        for z in range(fixture.size_z):
+            assert (
+                computed[0, channel_index, z] == fixture.value_for(z, channel_index=channel_index)
+            ).all(), f"C={channel_index}, Z={z}"
+
+
+def test_channel_names_derived_from_excitation_when_sidecar_silent(
+    tmp_path: Path,
+) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    # No wavelength_config → fall back to Ex<λ>.
+    assert reader.channel_names == ["Ex488", "Ex561"]
+
+
+def test_channel_names_pull_from_wavelength_config(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "dye": "GFP", "fluor": "GFP"},
+            "561": {"dye": "mCherry", "fluor": "mCherry"},  # falls back to dye
+        },
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    assert reader.channel_names == ["GFP", "mCherry"]
+
+
+def test_channel_audit_shape_matches_zarrmony_61(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {
+                "name": "GFP",
+                "dye": "GFP",
+                "fluor": "GFP",
+                "emission_low_nm": 500,
+                "emission_high_nm": 550,
+            },
+            "561": {"dye": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    audit = reader.channel_audit
+    assert audit[0] == {
+        "index": 0,
+        "name": "GFP",
+        "excitation_nm": 488,
+        "dye": "GFP",
+        "fluor": "GFP",
+        "emission_low_nm": 500.0,
+        "emission_high_nm": 550.0,
+    }
+    # Single ``emission_nm`` → low == high (uniform-band convention).
+    assert audit[1] == {
+        "index": 1,
+        "name": "mCherry",
+        "excitation_nm": 561,
+        "dye": "mCherry",
+        "fluor": "mCherry",
+        "emission_low_nm": 610.0,
+        "emission_high_nm": 610.0,
+    }
+
+
+def test_channel_audit_omits_missing_fields(tmp_path: Path) -> None:
+    # Silent sidecar → only the fields the reader could actually determine
+    # (index, name, excitation_nm) appear. ADR-0008 forbids null.
+    fixture = write_synthetic_smartspim(tmp_path, channel_specs=((488, 1),))
+    reader = SmartSpimReader(fixture.export_dir)
+    audit = reader.channel_audit
+    assert audit == [{"index": 0, "name": "Ex488", "excitation_nm": 488}]
+
+
+def test_ome_metadata_returns_ome_object_with_channels(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_low_nm": 500, "emission_high_nm": 550},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    ome = reader.ome_metadata
+    assert len(ome.images) == 1
+    pixels = ome.images[0].pixels
+    assert pixels.size_c == 2
+    assert pixels.size_z == fixture.size_z
+    assert pixels.size_y == fixture.size_y
+    assert pixels.size_x == fixture.size_x
+    assert pixels.physical_size_x == pytest.approx(fixture.xy_pixel_size_um)
+    assert pixels.physical_size_y == pytest.approx(fixture.xy_pixel_size_um)
+    assert pixels.physical_size_z == pytest.approx(fixture.z_step_um)
+
+    ch0, ch1 = pixels.channels
+    assert ch0.name == "GFP"
+    assert ch0.fluor == "GFP"
+    assert ch0.excitation_wavelength == pytest.approx(488)
+    # A band collapses to its low edge in OME's single-scalar model.
+    assert ch0.emission_wavelength == pytest.approx(500)
+    assert ch1.name == "mCherry"
+    assert ch1.fluor == "mCherry"
+    assert ch1.excitation_wavelength == pytest.approx(561)
+    assert ch1.emission_wavelength == pytest.approx(610)
+
+
+def test_ome_metadata_round_trips_through_xml(tmp_path: Path) -> None:
+    from ome_types import from_xml
+
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_nm": 525},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    xml = reader.ome_metadata.to_xml()
+    parsed = from_xml(xml)
+    assert len(parsed.images) == 1
+    assert [c.name for c in parsed.images[0].pixels.channels] == ["GFP", "mCherry"]
+    assert [c.fluor for c in parsed.images[0].pixels.channels] == ["GFP", "mCherry"]
+
+
+def test_ome_metadata_omits_fluor_when_sidecar_silent(synthetic_smartspim) -> None:
+    reader = SmartSpimReader(synthetic_smartspim.export_dir)
+    ch = reader.ome_metadata.images[0].pixels.channels[0]
+    assert ch.fluor is None
+    assert ch.emission_wavelength is None
+    # Excitation always survives — it comes from the directory name.
+    assert ch.excitation_wavelength == pytest.approx(488)
 
 
 def test_missing_metadata_sidecar_raises_actionable_error(tmp_path: Path) -> None:
@@ -125,5 +265,20 @@ def test_no_stitched_channel_dir_raises(tmp_path: Path) -> None:
     d = tmp_path / "not_smartspim"
     d.mkdir()
     (d / "some_other_dir").mkdir()
+    (d / "metadata_x.json").write_bytes(
+        b'{"session_config": {"\xb5m/pix": "1.0", "z_step_um": "1.0"}}'
+    )
     with pytest.raises(SmartSpimDataError, match="no Ex_"):
         SmartSpimReader(d)
+
+
+def test_channels_with_mismatched_z_depth_raises(tmp_path: Path) -> None:
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        channel_specs=((488, 1), (561, 3)),
+    )
+    # Delete one slice from the second channel to induce a Z mismatch.
+    doomed = sorted(fixture.channel_dirs[1].glob("*.tif"))[-1]
+    doomed.unlink()
+    with pytest.raises(SmartSpimDataError, match="Z-slices"):
+        SmartSpimReader(fixture.export_dir)

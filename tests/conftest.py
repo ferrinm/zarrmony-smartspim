@@ -29,12 +29,14 @@ class SmartSpimFixture:
     export_dir: Path
     metadata_path: Path
     channel_dirs: list[Path]
+    channel_specs: tuple[tuple[int, int], ...]
     size_z: int
     size_y: int
     size_x: int
     xy_pixel_size_um: float
     z_step_um: float
     z_step_tenths_um: int  # e.g. 20 for z_step_um=2.0 (files stepped by 20)
+    wavelength_config: dict[str, dict[str, object]] | None = None
 
     def value_for(self, z: int, channel_index: int = 0) -> int:
         # Distinct per-(channel, z) fill so tests can pin Z-order without
@@ -52,13 +54,20 @@ def write_synthetic_smartspim(
     xy_pixel_size_um: float = 1.800,
     z_step_um: float = 2.00,
     channel_specs: tuple[tuple[int, int], ...] = ((488, 1),),
+    wavelength_config: dict[str, dict[str, object]] | None = None,
 ) -> SmartSpimFixture:
     """Write a synthetic SmartSPIM export under ``root``.
 
     ``channel_specs`` is a tuple of ``(excitation_wavelength, channel_index)``
     pairs — e.g. ``((488, 1), (561, 3), (639, 4))`` for a typical three-channel
-    SmartSPIM export. v0.1's adapter only reads the first channel;
-    multi-channel semantics arrive in slice #2.
+    SmartSPIM export. Every dir under ``channel_specs`` becomes one channel
+    the adapter surfaces; slice #2 adds multi-channel support and stacks them
+    along ``C`` in the order returned here.
+
+    ``wavelength_config`` seeds an optional per-channel identity block in the
+    sidecar keyed by excitation-wavelength string
+    (``{"488": {"dye": "GFP", ...}}``). ``None`` writes no block so tests can
+    exercise the "sidecar lacks channel labels → derived name" fallback.
     """
     export_dir = root / sample_id
     export_dir.mkdir(parents=True)
@@ -82,7 +91,7 @@ def write_synthetic_smartspim(
             )
             tifffile.imwrite(ch_dir / filename, plane, photometric="minisblack")
 
-    metadata = {
+    metadata: dict[str, object] = {
         "session_config": {
             "Blank": "Blank",
             "Immersion": "1.52+",
@@ -96,6 +105,8 @@ def write_synthetic_smartspim(
             "µm/pix": f"{xy_pixel_size_um:.3f}",
         }
     }
+    if wavelength_config is not None:
+        metadata["wavelength_config"] = wavelength_config
     metadata_path = export_dir / f"metadata_{sample_id}.json"
     # latin-1 on purpose — see module docstring. json.dumps with
     # ensure_ascii=False lets the µ character survive; encoding to latin-1
@@ -106,12 +117,14 @@ def write_synthetic_smartspim(
         export_dir=export_dir,
         metadata_path=metadata_path,
         channel_dirs=channel_dirs,
+        channel_specs=channel_specs,
         size_z=size_z,
         size_y=size_y,
         size_x=size_x,
         xy_pixel_size_um=xy_pixel_size_um,
         z_step_um=z_step_um,
         z_step_tenths_um=z_step_tenths_um,
+        wavelength_config=wavelength_config,
     )
 
 
