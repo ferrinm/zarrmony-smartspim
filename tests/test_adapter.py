@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import tifffile
 from zarrmony.readers.plugin import ReaderProtocol
 
 from tests.conftest import write_synthetic_smartspim
@@ -282,3 +283,127 @@ def test_channels_with_mismatched_z_depth_raises(tmp_path: Path) -> None:
     doomed.unlink()
     with pytest.raises(SmartSpimDataError, match="Z-slices"):
         SmartSpimReader(fixture.export_dir)
+
+
+def test_ome_metadata_carries_instrument_and_acquisition_date(tmp_path: Path) -> None:
+    # ``reader.ome_metadata`` folds the parsed sidecar into an ``<Instrument>``
+    # (Microscope + Objective) at the OME root plus an ``AcquisitionDate`` on
+    # the Image, so zarrmony's ``extract_{objective,acquisition}_from_ome``
+    # projects them straight into the audit block.
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        extra_session_config={"NA": "0.55", "model": "SmartSPIM XL", "Immersion": "Oil"},
+        extra_top_level={"machine_id": "SN-4242", "date": "2025-06-15T09:30:00"},
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    ome = reader.ome_metadata
+    assert len(ome.instruments) == 1
+    inst = ome.instruments[0]
+    assert inst.microscope.manufacturer == "LifeCanvas"
+    assert inst.microscope.model == "SmartSPIM XL"
+    assert inst.microscope.serial_number == "SN-4242"
+    obj = inst.objectives[0]
+    assert obj.nominal_magnification == pytest.approx(3.6)
+    assert obj.lens_na == pytest.approx(0.55)
+    assert obj.immersion.value == "Oil"
+    assert obj.model == "LCT 3.6x"
+    image = ome.images[0]
+    assert image.acquisition_date is not None
+    assert image.acquisition_date.isoformat() == "2025-06-15T09:30:00"
+
+
+def test_ome_metadata_defaults_microscope_model_when_sidecar_silent(
+    synthetic_smartspim,
+) -> None:
+    # A sidecar without a model still surfaces the family name ``SmartSPIM``
+    # in the audit — we know the export was made on a LifeCanvas SmartSPIM
+    # by construction (the plugin matcher only accepts SmartSPIM exports).
+    reader = SmartSpimReader(synthetic_smartspim.export_dir)
+    inst = reader.ome_metadata.instruments[0]
+    assert inst.microscope.manufacturer == "LifeCanvas"
+    assert inst.microscope.model == "SmartSPIM"
+    assert inst.microscope.serial_number is None
+    # Default fixture has obj_magnification + obj_name + immersion; those
+    # still land on the Objective even when the sidecar is otherwise minimal.
+    obj = inst.objectives[0]
+    assert obj.nominal_magnification == pytest.approx(3.6)
+    assert obj.model == "LCT 3.6x"
+    # AcquisitionDate is absent when the sidecar didn't carry one — no
+    # placeholder date is invented.
+    assert reader.ome_metadata.images[0].acquisition_date is None
+
+
+def test_ome_metadata_omits_objective_when_sidecar_carries_none(tmp_path: Path) -> None:
+    # A sidecar stripped of every objective field: no magnification, no
+    # model, no NA, no immersion. The Instrument still ships (for the
+    # microscope) but the Objective is omitted — zarrmony's
+    # ``extract_objective_from_ome`` returns ``None`` for such an OME, so the
+    # audit's ``objective`` key is absent per the ADR-0008 omit-not-null rule.
+    from pathlib import Path as _P
+
+    path = _P(tmp_path) / "export" / "metadata_x.json"
+    path.parent.mkdir()
+    payload = '{"session_config": {"\xb5m/pix": "1.0", "z_step_um": "1.0"}}'
+    path.write_bytes(payload.encode("latin-1"))
+    (path.parent / "Ex_488_Ch1_stitched").mkdir()
+    import numpy as _np
+    import tifffile as _tf
+
+    for z in range(2):
+        _tf.imwrite(
+            path.parent / "Ex_488_Ch1_stitched" / f"000000_000000_{z * 10:06d}_Ch1.tif",
+            _np.zeros((4, 4), dtype=_np.uint16),
+        )
+    reader = SmartSpimReader(path.parent)
+    inst = reader.ome_metadata.instruments[0]
+    assert inst.objectives == []
+
+
+def test_instrument_audit_shape_matches_adr_0008(tmp_path: Path) -> None:
+    # ``reader.instrument_audit`` is the block projected in the ADR-0008 /
+    # zarrmony#63–#65 shape — same key names + value types as the CZI / ND2 /
+    # OME-TIFF readers surface via ``reader.ome_metadata`` extraction, plus
+    # an ``imaging_method`` list which OME can't carry natively.
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        extra_session_config={"NA": "0.55", "model": "SmartSPIM"},
+        extra_top_level={"machine_id": "SN-4242", "date": "2025-06-15T09:30:00"},
+    )
+    reader = SmartSpimReader(fixture.export_dir)
+    audit = reader.instrument_audit
+    assert audit["acquisition"] == {
+        "date": "2025-06-15T09:30:00",
+        "microscope": "LifeCanvas SmartSPIM",
+        "microscope_serial": "SN-4242",
+        "imaging_method": ["light_sheet"],
+    }
+    assert audit["objective"] == {
+        "nominal_magnification": 3.6,
+        "numerical_aperture": 0.55,
+        "immersion": "Other",
+        "model": "LCT 3.6x",
+    }
+
+
+def test_instrument_audit_omits_missing_optional_fields(tmp_path: Path) -> None:
+    # A stripped sidecar carries only what the reader could actually determine.
+    # Only ``microscope`` (falls back to the family name) and ``imaging_method``
+    # (a construction constant) are non-optional.
+    path = tmp_path / "export" / "metadata_x.json"
+    path.parent.mkdir()
+    payload = '{"session_config": {"\xb5m/pix": "1.0", "z_step_um": "1.0"}}'
+    path.write_bytes(payload.encode("latin-1"))
+    (path.parent / "Ex_488_Ch1_stitched").mkdir()
+    for z in range(2):
+        tifffile.imwrite(
+            path.parent / "Ex_488_Ch1_stitched" / f"000000_000000_{z * 10:06d}_Ch1.tif",
+            np.zeros((4, 4), dtype=np.uint16),
+        )
+    reader = SmartSpimReader(path.parent)
+    audit = reader.instrument_audit
+    assert audit == {
+        "acquisition": {
+            "microscope": "LifeCanvas SmartSPIM",
+            "imaging_method": ["light_sheet"],
+        },
+    }

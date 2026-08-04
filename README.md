@@ -31,8 +31,11 @@ This pulls `zarrmony` from PyPI as a transitive dependency.
   `reader.ome_metadata`. Excitation is always known (from the directory
   name); the remaining fields come from an optional `wavelength_config`
   block in the sidecar (see below).
-- The ADR-0008 instrument audit block (microscope, serial, acquisition
-  date) lands in a follow-up slice.
+- The ADR-0008 instrument audit block (microscope, serial, objective,
+  acquisition date) is folded into the OME's `<Instrument>` + `<Image>`
+  and lands under `attrs.zarrmony.audit.per_scene[i].{acquisition,objective}`
+  via zarrmony's OME extractor. Missing sidecar fields are omitted from
+  the audit rather than nulled, per the ADR-0008 omit-not-null rule.
 
 ### Optional `wavelength_config` block
 
@@ -55,6 +58,30 @@ is absent:
 
 A single `emission_nm` scalar is expanded to `emission_low_nm ==
 emission_high_nm` per the ADR-0008 / zarrmony#61 uniform-band convention.
+
+### Instrument audit fields
+
+Populated from the sidecar with liberal key aliasing (LifeCanvas software
+has shipped several spellings — first-writer-wins across each list).
+Everything is optional; missing fields are omitted from
+`attrs.zarrmony.audit`.
+
+| Audit key                     | Accepted sidecar keys (session_config OR top-level)                                          |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `microscope`                  | `microscope_model`, `microscope`, `system_model`, `system`, `model`, `instrument`            |
+| `microscope_serial`           | `microscope_serial`, `serial_number`, `serial`, `machine_id`, `machine`, `system_serial`, `instrument_serial` |
+| `date` (acquisition)          | `acquisition_date`, `date`, `start_time`, `acquisition_start`, `session_start`, `timestamp`  |
+| `objective.nominal_magnification` | `obj_magnification`, `objective_magnification`, `magnification`, `nominal_magnification` |
+| `objective.numerical_aperture`    | `NA`, `na`, `numerical_aperture`, `obj_NA`, `objective_NA`, `objective_na`               |
+| `objective.model`                 | `obj_name`, `objective_name`, `objective_model`, `objective`                              |
+| `objective.immersion`             | `immersion`, `Immersion`, `objective_immersion`, `immersion_media`, `immersion_medium`   |
+
+`microscope` always resolves to at least `"LifeCanvas SmartSPIM"` — a
+SmartSPIM export was made on a LifeCanvas microscope by construction.
+Refractive-index shorthand (`"1.52"` / `"1.52+"`) in the immersion field
+degrades to the OME `"Other"` enum value since OME has no cleared-tissue
+enum. Vendor-shape acquisition-date formats (`YYYY_MM_DD_HHMMSS`,
+`YYYYMMDD_HHMMSS`) are normalised to ISO 8601.
 
 ## Metadata sidecar
 

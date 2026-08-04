@@ -137,3 +137,79 @@ def test_wavelength_config_absent_yields_empty_map(synthetic_smartspim) -> None:
     assert identity.dye is None
     assert identity.fluor is None
     assert identity.emission_low_nm is None
+
+
+def test_instrument_parses_full_sidecar(tmp_path: Path) -> None:
+    # A fully-populated sidecar exercises every alias the parser knows about:
+    # model + serial in session_config, date at the top level, NA + immersion
+    # + objective model in session_config.
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        extra_session_config={
+            "NA": "0.55",
+            "model": "SmartSPIM XL",
+            "Immersion": "Oil",
+        },
+        extra_top_level={
+            "machine_id": "SN-4242",
+            "date": "2025-06-15T09:30:00",
+        },
+    )
+    meta = parse_metadata_file(fixture.metadata_path)
+    assert meta.instrument.microscope_model == "SmartSPIM XL"
+    assert meta.instrument.microscope_serial == "SN-4242"
+    assert meta.instrument.acquisition_date == "2025-06-15T09:30:00"
+    assert meta.instrument.objective_magnification == pytest.approx(3.6)
+    assert meta.instrument.objective_numerical_aperture == pytest.approx(0.55)
+    assert meta.instrument.objective_model == "LCT 3.6x"
+    assert meta.instrument.objective_immersion == "Oil"
+    # SmartSPIM is a light-sheet instrument by construction.
+    assert meta.instrument.imaging_method == ("light_sheet",)
+
+
+def test_instrument_degrades_gracefully_on_stripped_sidecar(tmp_path: Path) -> None:
+    # A minimal sidecar (only the required pixel-size keys) leaves every
+    # optional instrument field at None — no exception, no placeholder junk.
+    path = tmp_path / "metadata_bare.json"
+    payload = '{"session_config": {"\xb5m/pix": "1.0", "z_step_um": "1.0"}}'
+    path.write_bytes(payload.encode("latin-1"))
+    meta = parse_metadata_file(path)
+    assert meta.instrument.microscope_model is None
+    assert meta.instrument.microscope_serial is None
+    assert meta.instrument.acquisition_date is None
+    assert meta.instrument.objective_magnification is None
+    assert meta.instrument.objective_numerical_aperture is None
+    assert meta.instrument.objective_model is None
+    assert meta.instrument.objective_immersion is None
+    # imaging_method is a construction constant, not sidecar-dependent.
+    assert meta.instrument.imaging_method == ("light_sheet",)
+
+
+def test_instrument_refractive_index_immersion_maps_to_other(synthetic_smartspim) -> None:
+    # The default fixture ships ``Immersion: "1.52+"`` — a refractive-index
+    # shorthand, not an OME enum value. The parser degrades to ``"Other"``
+    # (the OME catch-all) rather than dropping the field or crashing.
+    meta = parse_metadata_file(synthetic_smartspim.metadata_path)
+    assert meta.instrument.objective_immersion == "Other"
+
+
+def test_instrument_normalises_vendor_date_formats(tmp_path: Path) -> None:
+    # LifeCanvas has shipped ``YYYY_MM_DD_HHMMSS`` in the wild — parser
+    # normalises to ISO 8601 so BQ ingest doesn't have to know vendor shapes.
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        extra_top_level={"date": "2025_06_15_093000"},
+    )
+    meta = parse_metadata_file(fixture.metadata_path)
+    assert meta.instrument.acquisition_date == "2025-06-15T09:30:00"
+
+
+def test_instrument_preserves_unparseable_date_verbatim(tmp_path: Path) -> None:
+    # Non-standard timestamp survives in the audit rather than being dropped;
+    # a raw string is more useful to consumers than a missing field.
+    fixture = write_synthetic_smartspim(
+        tmp_path,
+        extra_top_level={"date": "totally not a date"},
+    )
+    meta = parse_metadata_file(fixture.metadata_path)
+    assert meta.instrument.acquisition_date == "totally not a date"

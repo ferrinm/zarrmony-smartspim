@@ -55,6 +55,8 @@ def write_synthetic_smartspim(
     z_step_um: float = 2.00,
     channel_specs: tuple[tuple[int, int], ...] = ((488, 1),),
     wavelength_config: dict[str, dict[str, object]] | None = None,
+    extra_session_config: dict[str, object] | None = None,
+    extra_top_level: dict[str, object] | None = None,
 ) -> SmartSpimFixture:
     """Write a synthetic SmartSPIM export under ``root``.
 
@@ -68,6 +70,13 @@ def write_synthetic_smartspim(
     sidecar keyed by excitation-wavelength string
     (``{"488": {"dye": "GFP", ...}}``). ``None`` writes no block so tests can
     exercise the "sidecar lacks channel labels → derived name" fallback.
+
+    ``extra_session_config`` merges additional keys into ``session_config`` —
+    used by the instrument-audit tests to seed fields like ``NA``, ``model``,
+    or overridden ``obj_name``. ``extra_top_level`` merges additional keys
+    into the top-level metadata dict — used to seed acquisition ``date`` and
+    ``machine_id`` fields that some vendor sidecars place outside
+    ``session_config``.
     """
     export_dir = root / sample_id
     export_dir.mkdir(parents=True)
@@ -91,22 +100,25 @@ def write_synthetic_smartspim(
             )
             tifffile.imwrite(ch_dir / filename, plane, photometric="minisblack")
 
-    metadata: dict[str, object] = {
-        "session_config": {
-            "Blank": "Blank",
-            "Immersion": "1.52+",
-            "Version": "5.0.0.67",
-            "obj_magnification": "3.600000",
-            "obj_name": "LCT 3.6x",
-            "sampling": "1/1",
-            "scanning": "Fast",
-            "v_res": "1600",
-            "z_step_um": f"{z_step_um:.2f}",
-            "µm/pix": f"{xy_pixel_size_um:.3f}",
-        }
+    session_config: dict[str, object] = {
+        "Blank": "Blank",
+        "Immersion": "1.52+",
+        "Version": "5.0.0.67",
+        "obj_magnification": "3.600000",
+        "obj_name": "LCT 3.6x",
+        "sampling": "1/1",
+        "scanning": "Fast",
+        "v_res": "1600",
+        "z_step_um": f"{z_step_um:.2f}",
+        "µm/pix": f"{xy_pixel_size_um:.3f}",
     }
+    if extra_session_config:
+        session_config.update(extra_session_config)
+    metadata: dict[str, object] = {"session_config": session_config}
     if wavelength_config is not None:
         metadata["wavelength_config"] = wavelength_config
+    if extra_top_level:
+        metadata.update(extra_top_level)
     metadata_path = export_dir / f"metadata_{sample_id}.json"
     # latin-1 on purpose — see module docstring. json.dumps with
     # ensure_ascii=False lets the µ character survive; encoding to latin-1
