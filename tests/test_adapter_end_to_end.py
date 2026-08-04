@@ -137,6 +137,36 @@ def test_omero_channel_labels_match_reader_channel_names(tmp_path: Path) -> None
     assert omero_labels == ["GFP", "mCherry"]
 
 
+def test_per_scene_channels_projected_into_audit(tmp_path: Path) -> None:
+    # zarrmony >=0.10 projects reader.ome_metadata.images[0].pixels.channels
+    # into per_scene[i].channels using the ADR-0008 / #61 shape. The OME
+    # <Channel> model has no `dye`, so the projection carries name/fluor/
+    # excitation_nm/emission_low_nm/emission_high_nm; single OME
+    # emission_wavelength collapses to low == high per #61's uniform-band
+    # convention.
+    fixture = write_synthetic_smartspim(
+        tmp_path / "in",
+        channel_specs=((488, 1), (561, 3)),
+        wavelength_config={
+            "488": {"name": "GFP", "fluor": "GFP", "emission_nm": 525},
+            "561": {"name": "mCherry", "fluor": "mCherry", "emission_nm": 610},
+        },
+    )
+    out_dir = tmp_path / "out"
+    _convert_with_plugin(fixture.export_dir, out_dir)
+
+    store = next(out_dir.glob("*.ome.zarr"))
+    audit = zarr.open_group(str(store), mode="r").attrs["zarrmony"]
+    assert audit["audit_schema_version"] >= 8
+    channels_audit = audit["per_scene"][0]["channels"]
+    assert [c["index"] for c in channels_audit] == [0, 1]
+    assert [c["name"] for c in channels_audit] == ["GFP", "mCherry"]
+    assert [c["fluor"] for c in channels_audit] == ["GFP", "mCherry"]
+    assert [c["excitation_nm"] for c in channels_audit] == [488, 561]
+    assert [c["emission_low_nm"] for c in channels_audit] == [525, 610]
+    assert [c["emission_high_nm"] for c in channels_audit] == [525, 610]
+
+
 def test_ome_xml_written_and_round_trips_to_ome(tmp_path: Path) -> None:
     fixture = write_synthetic_smartspim(
         tmp_path / "in",
