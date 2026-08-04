@@ -1,0 +1,60 @@
+[project]
+name = "zarrmony-smartspim"
+version = "0.1.0"
+description = "LifeCanvas SmartSPIM stitched-export reader plugin for zarrmony."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Max Ferrin", email = "ferrin@calicolabs.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "zarrmony>=0.9.0",
+    "tifffile>=2024.0",
+    "dask>=2026.3.0",
+    "numpy>=2",
+    "xarray>=2025.9.0",
+]
+
+[project.entry-points."zarrmony.readers"]
+smartspim = "zarrmony_smartspim:plugin"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=7",
+    "ruff>=0.14",
+    "pre-commit>=4",
+]
+
+[project.urls]
+Homepage = "https://github.com/ferrinm/zarrmony-smartspim"
+Issues = "https://github.com/ferrinm/zarrmony-smartspim/issues"
+Changelog = "https://github.com/ferrinm/zarrmony-smartspim/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zarrmony_smartspim"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-ra"]
