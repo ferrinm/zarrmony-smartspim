@@ -19,6 +19,32 @@ pip install git+https://github.com/ferrinm/zarrmony-smartspim
 
 This pulls `zarrmony` from PyPI as a transitive dependency.
 
+## Verify the plugin registered
+
+```python
+from zarrmony.readers.plugin import list_plugins
+
+print([p.name for p in list_plugins()])
+# -> [..., 'zarrmony-smartspim']
+```
+
+## Supported SmartSPIM exports
+
+- **Export format**: LifeCanvas SmartSPIM stitched-export directory —
+  one or more `Ex_<λ>_Ch<N>_stitched/` subdirs at the top level, each
+  containing 2-D TIFF Z-slices, plus a top-level
+  `metadata_<sample-id>.json` sidecar (Latin-1 encoded).
+- **Acquisition software**: exercised against sidecars produced by
+  LifeCanvas SmartSPIM acquisition software v5.x. Earlier and later
+  versions are read on a best-effort basis via liberal key aliasing
+  (see the "Instrument audit fields" table below) — the vendor has
+  shipped several key spellings over the years and the parser accepts
+  each.
+- **Detection**: the matcher fires on the presence of at least one
+  `Ex_<λ>_Ch<N>_stitched/` child. A missing metadata sidecar surfaces
+  as `SmartSpimMetadataError` at read time with a message pointing at
+  the expected filename.
+
 ## Scope
 
 - Single-scene per SmartSPIM export (one Z-stack).
@@ -94,6 +120,16 @@ plugin — the key would be lost.
 Place the metadata JSON at the top of the export directory. Any file matching
 `metadata*.json` is accepted (the vendor typically names it
 `metadata_<sample-id>.json`).
+
+## Why a separate package?
+
+SmartSPIM ships its own on-disk shape (directory-of-channel-dirs, no
+bundled OME-XML, Latin-1 sidecar) that would not fit cleanly into
+zarrmony's built-in reader graph. See zarrmony
+[ADR-0003](https://github.com/ferrinm/zarrmony/blob/main/docs/adr/0003-external-adapter-package-for-non-bioio-readers.md)
+for the full rationale, and the
+[reader-plugin authoring guide](https://github.com/ferrinm/zarrmony/blob/main/docs/writing-a-reader-plugin.md)
+for how to build your own.
 
 ## License
 
