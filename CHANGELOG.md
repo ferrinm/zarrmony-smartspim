@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-05
+
+### Added
+
+- `SmartSpimReader` accepts an optional `metadata_path=` kwarg that
+  overrides the top-of-export-directory sidecar lookup. Motivating case:
+  a read-only export mount paired with a sidecar that lives on a
+  separate writable drive (a common LifeCanvas deployment shape). A
+  missing override file raises `SmartSpimMetadataError` with a clear
+  message. The zarrmony plugin entry point is unchanged — it still
+  discovers the sidecar via the top-level `metadata*.json` glob.
+
 ## [0.1.1] — 2026-08-05
 
 ### Changed

@@ -119,6 +119,26 @@ Place the metadata JSON at the top of the export directory. Any file matching
 `metadata*.json` is accepted (the vendor typically names it
 `metadata_<sample-id>.json`).
 
+### Sidecar stored outside a read-only export
+
+If the export directory is read-only (a common LifeCanvas deployment shape —
+the acquisition PC's share is exposed as read-only, and the sidecar lives on
+a project drive), pass the sidecar path directly. The reader skips its usual
+top-of-directory lookup and reads from wherever you point it:
+
+```python
+from zarrmony_smartspim import SmartSpimReader
+
+reader = SmartSpimReader(
+    "/read-only/mount/<sample-id>",
+    metadata_path="/writable/project/metadata_<sample-id>.json",
+)
+```
+
+This kwarg is only exposed on the direct `SmartSpimReader` constructor —
+zarrmony's plugin entry point still looks for the sidecar at the top of the
+export directory.
+
 ## Why a separate package?
 
 SmartSPIM ships its own on-disk shape (directory-of-channel-dirs, no

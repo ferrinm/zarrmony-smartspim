@@ -123,12 +123,27 @@ class SmartSpimReader:
     plate_layout = None
     scenes = ["volume"]
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, metadata_path: Path | None = None) -> None:
+        """Open a SmartSPIM stitched export.
+
+        ``metadata_path`` overrides the default top-of-``path`` sidecar lookup.
+        Use it when the export directory is read-only and the
+        ``metadata_<sample-id>.json`` sidecar lives elsewhere (a common
+        LifeCanvas deployment shape); the file is still parsed as
+        Latin-1 and validated the same way ``find_metadata_file`` would.
+        """
         self._dir = Path(path)
 
-        metadata_path = find_metadata_file(self._dir)
-        self._metadata_path = metadata_path
-        self._meta: SmartSpimMetadata = parse_metadata_file(metadata_path)
+        if metadata_path is None:
+            resolved_metadata_path = find_metadata_file(self._dir)
+        else:
+            resolved_metadata_path = Path(metadata_path)
+            if not resolved_metadata_path.is_file():
+                raise SmartSpimMetadataError(
+                    f"metadata_path {resolved_metadata_path} does not exist or is not a file"
+                )
+        self._metadata_path = resolved_metadata_path
+        self._meta: SmartSpimMetadata = parse_metadata_file(resolved_metadata_path)
 
         self._channels: list[_ChannelSource] = _discover_channels(self._dir, self._meta)
 

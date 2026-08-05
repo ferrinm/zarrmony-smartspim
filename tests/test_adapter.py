@@ -251,6 +251,31 @@ def test_missing_metadata_sidecar_raises_actionable_error(tmp_path: Path) -> Non
         SmartSpimReader(fixture.export_dir)
 
 
+def test_metadata_path_override_reads_sidecar_from_elsewhere(tmp_path: Path) -> None:
+    # Read-only export dirs are the motivating case: the sidecar can live
+    # anywhere the process can read, and physical_pixel_sizes / channel names
+    # still resolve from it.
+    fixture = write_synthetic_smartspim(tmp_path)
+    external = tmp_path / "elsewhere" / "sidecar.json"
+    external.parent.mkdir()
+    external.write_bytes(fixture.metadata_path.read_bytes())
+    fixture.metadata_path.unlink()
+
+    reader = SmartSpimReader(fixture.export_dir, metadata_path=external)
+
+    assert reader._metadata_path == external
+    assert reader.physical_pixel_sizes.X == pytest.approx(fixture.xy_pixel_size_um)
+    assert reader.physical_pixel_sizes.Z == pytest.approx(fixture.z_step_um)
+
+
+def test_metadata_path_override_missing_file_raises(synthetic_smartspim, tmp_path: Path) -> None:
+    with pytest.raises(SmartSpimMetadataError, match="does not exist or is not a file"):
+        SmartSpimReader(
+            synthetic_smartspim.export_dir,
+            metadata_path=tmp_path / "nope.json",
+        )
+
+
 def test_empty_channel_dir_raises(tmp_path: Path) -> None:
     fixture = write_synthetic_smartspim(tmp_path)
     for tif in fixture.channel_dirs[0].glob("*.tif"):
