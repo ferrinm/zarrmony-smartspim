@@ -11,10 +11,8 @@ zarrmony convert /path/to/<sample-id> ./out
 
 ## Install
 
-_Not yet on PyPI._ Install from source:
-
 ```bash
-pip install git+https://github.com/ferrinm/zarrmony-smartspim
+pip install zarrmony-smartspim
 ```
 
 This pulls `zarrmony` from PyPI as a transitive dependency.

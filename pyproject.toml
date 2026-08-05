@@ -1,6 +1,6 @@
 [project]
 name = "zarrmony-smartspim"
-version = "0.1.0"
+version = "0.1.1"
 description = "LifeCanvas SmartSPIM stitched-export reader plugin for zarrmony."
 readme = "README.md"
 requires-python = ">=3.13"
