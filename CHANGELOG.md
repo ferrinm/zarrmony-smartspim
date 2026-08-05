@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-05
+
+### Fixed
+
+- Plugin `_open()` now forwards the `metadata_path` kwarg to
+  `SmartSpimReader`, completing the sidecar-override plumbing v0.2.0
+  half-shipped. Pairs with zarrmony v0.13.0's generic `reader_kwargs`
+  passthrough — the end-to-end snippet from the motivating case now
+  works:
+
+  ```python
+  from zarrmony import inspect
+  inspect(
+      "/Volumes/PD_external_WuLab-ro/56502",
+      reader_kwargs={"metadata_path": "/gdrive/.../metadata_56502.json"},
+  )
+  ```
+
+  Same on the CLI:
+
+  ```bash
+  zarrmony inspect /mnt/readonly/56502 \
+    --reader-kwarg metadata_path=/writable/metadata_56502.json
+  ```
+
+  Direct instantiation (`SmartSpimReader(path, metadata_path=...)`) was
+  already supported in v0.2.0; only the plugin dispatch path was still
+  swallowing the kwarg.
+
+### Changed
+
+- Pin bumped from `zarrmony>=0.10.0` to `zarrmony>=0.13.0` so the
+  reader-kwargs passthrough is guaranteed to be present. Older zarrmony
+  releases silently ignored the CLI/API kwarg — the bumped pin fails
+  install rather than fails surprisingly at call time.
+
 ## [0.2.0] — 2026-08-05
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "zarrmony-smartspim"
-version = "0.2.0"
+version = "0.2.1"
 description = "LifeCanvas SmartSPIM stitched-export reader plugin for zarrmony."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "zarrmony>=0.10.0",
+    "zarrmony>=0.13.0",
     "tifffile>=2024.0",
     "dask>=2026.3.0",
     "numpy>=2",

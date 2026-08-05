@@ -31,8 +31,23 @@ __all__ = [
 ]
 
 
-def _open(path: Path) -> SmartSpimReader:
-    return SmartSpimReader(path)
+def _open(
+    path: Path, *, metadata_path: str | Path | None = None
+) -> SmartSpimReader:
+    """Plugin entry point — forwards ``metadata_path`` to the reader.
+
+    Zarrmony >= 0.13 calls ``plugin.open(p, **reader_kwargs)`` so that
+    callers can reach reader-specific options through the public API
+    (``convert(..., reader_kwargs={...})``, ``inspect(..., reader_kwargs={...})``)
+    and the CLI (``--reader-kwarg metadata_path=...``). The motivating
+    LifeCanvas deployment shape is a read-only export mount paired with a
+    sidecar JSON on a separate writable drive.
+
+    Callers on zarrmony < 0.13 continue to work with the default sidecar
+    lookup (zarrmony just calls ``_open(path)`` with no kwargs); reaching
+    the override requires the passthrough shipped in zarrmony 0.13.
+    """
+    return SmartSpimReader(path, metadata_path=metadata_path)
 
 
 plugin = ReaderPlugin(
